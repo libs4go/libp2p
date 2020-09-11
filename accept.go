@@ -62,6 +62,10 @@ func (host *hostImpl) muxAcceptLoop(id string, muxSession muxado.Session, isClie
 			if !isClient && pair.in == muxSession {
 				pair.in = nil
 			}
+
+			if pair.in == nil && pair.out == nil {
+				delete(host.muxSessions, id)
+			}
 		}
 		host.Unlock()
 

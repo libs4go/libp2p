@@ -54,4 +54,14 @@ func TestStorage(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, len(ms), 2)
+
+	err = storage.RemovePeer(k.Address(), m2)
+
+	require.NoError(t, err)
+
+	ms, err = storage.GetPeer(k.Address())
+
+	require.NoError(t, err)
+
+	require.Equal(t, len(ms), 1)
 }

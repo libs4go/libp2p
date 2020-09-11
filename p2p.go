@@ -44,11 +44,13 @@ type Host interface {
 	ID() string
 	LocalAddrs() []multiaddr.Multiaddr
 	Register(paddr multiaddr.Multiaddr) error
+	Unregister(paddr multiaddr.Multiaddr) error
 	Find(id string) ([]multiaddr.Multiaddr, bool)
 	Peers() []string
 	Dial(ctx context.Context, id string, dialOpts ...grpc.DialOption) (*grpc.ClientConn, error)
 	Server() *grpc.Server
 	Run() error
+	Connected() []string
 }
 
 type hostImpl struct {
@@ -193,6 +195,19 @@ func (host *hostImpl) ID() string {
 	return host.id.Address()
 }
 
+func (host *hostImpl) Connected() []string {
+	host.RLock()
+	defer host.RUnlock()
+
+	var ids []string
+
+	for id := range host.muxSessions {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
 func (host *hostImpl) LocalAddrs() []multiaddr.Multiaddr {
 	return host.laddrs
 }
@@ -265,6 +280,41 @@ func (host *hostImpl) Register(addr multiaddr.Multiaddr) error {
 
 	if host.persistence {
 		if err := host.storage.PutPeer(id, prefix, 0); err != nil {
+			return errors.Wrap(err, "save peer %s with addr %s error", id, prefix)
+		}
+	}
+
+	return nil
+}
+
+func (host *hostImpl) Unregister(paddr multiaddr.Multiaddr) error {
+	prefix, id, err := didFromAddress(paddr)
+
+	if err != nil {
+		return errors.Wrap(err, "p2p register addr must end with /did")
+	}
+
+	if prefix == nil {
+		return errors.Wrap(err, "p2p register addr must have prefix")
+	}
+
+	host.Lock()
+	addrs := host.peers[id]
+
+	var new []multiaddr.Multiaddr
+
+	for _, addr := range addrs {
+		if !addr.Equal(prefix) {
+			new = append(new, addr)
+		}
+	}
+
+	host.peers[id] = new
+
+	host.Unlock()
+
+	if len(new) != len(addrs) && host.persistence {
+		if err := host.storage.RemovePeer(id, prefix); err != nil {
 			return errors.Wrap(err, "save peer %s with addr %s error", id, prefix)
 		}
 	}

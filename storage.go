@@ -21,7 +21,7 @@ type Storage interface {
 	SaveLocalKey(mnemonic string, password string) error
 	PutPeer(id string, addr multiaddr.Multiaddr, lease time.Duration) error
 	GetPeer(id string) ([]multiaddr.Multiaddr, error)
-	RemovePeer(id string) error
+	RemovePeer(id string, addr multiaddr.Multiaddr) error
 }
 
 type peerInfo struct {
@@ -162,9 +162,9 @@ func (storage *storageImpl) GetPeer(id string) ([]multiaddr.Multiaddr, error) {
 	return addrs, nil
 }
 
-func (storage *storageImpl) RemovePeer(id string) error {
+func (storage *storageImpl) RemovePeer(id string, addr multiaddr.Multiaddr) error {
 
-	_, err := storage.engine.Where("i_d = ?", id).Delete(&peerInfo{})
+	_, err := storage.engine.Where("i_d = ? and addr = ?", id, addr.String()).Delete(&peerInfo{})
 
 	if err != nil {
 		return errors.Wrap(err, "remove peer %s error", id)
