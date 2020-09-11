@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/rand"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -61,10 +60,8 @@ type hostImpl struct {
 	listenOps       []stf4go.Option
 	persistence     bool
 	protectPassword string
-	datapath        string
 	laddrs          []multiaddr.Multiaddr
 	peers           map[string][]multiaddr.Multiaddr
-	storage         Storage
 	id              key.Key
 	tlsKeyStore     []byte
 	accepted        chan net.Conn
@@ -77,73 +74,11 @@ type sessionPair struct {
 	out muxado.Session
 }
 
-// Option .
-type Option func(*hostImpl) error
-
-// WithMnemonic set host key with mnemonic
-func WithMnemonic(mnemonic string) Option {
-	return func(host *hostImpl) error {
-		host.mnemonic = mnemonic
-		return nil
-	}
-}
-
-// DialOpts .
-func DialOpts(options ...stf4go.Option) Option {
-	return func(host *hostImpl) error {
-		host.dialOps = options
-		return nil
-	}
-}
-
-// ListenOpts .
-func ListenOpts(options ...stf4go.Option) Option {
-	return func(host *hostImpl) error {
-		host.listenOps = options
-		return nil
-	}
-}
-
-// Persistence storage peers/id and etc .. persistence
-// password protect the storage data
-func Persistence(password string) Option {
-	return func(host *hostImpl) error {
-		host.persistence = true
-		host.protectPassword = password
-		return nil
-	}
-}
-
-// Addrs set host listen addrs
-func Addrs(laddrs ...multiaddr.Multiaddr) Option {
-	return func(host *hostImpl) error {
-		host.laddrs = laddrs
-		return nil
-	}
-}
-
-// AddrStrings set host listen addrs with string format
-func AddrStrings(laddrs ...string) Option {
-	return func(host *hostImpl) error {
-		for _, laddr := range laddrs {
-			ma, err := multiaddr.NewMultiaddr(laddr)
-
-			if err != nil {
-				return errors.Wrap(err, "parse multiaddr %s error", laddr)
-			}
-
-			host.laddrs = append(host.laddrs, ma)
-		}
-		return nil
-	}
-}
-
 // New .
 func New(options ...Option) (Host, error) {
 
 	host := &hostImpl{
 		Logger:      slf4go.Get("p2p"),
-		datapath:    "./data",
 		peers:       make(map[string][]multiaddr.Multiaddr),
 		muxSessions: make(map[string]*sessionPair),
 		accepted:    make(chan net.Conn),
@@ -161,23 +96,6 @@ func New(options ...Option) (Host, error) {
 		if err := opt(host); err != nil {
 			return nil, errors.Wrap(err, "call opt error")
 		}
-	}
-
-	if !isExists(host.datapath) {
-		if err := os.MkdirAll(host.datapath, 0644); err != nil {
-			return nil, errors.Wrap(err, "create data path %s error", host.datapath)
-		}
-	}
-
-	if host.persistence {
-
-		storage, err := newStorage(host.datapath)
-
-		if err != nil {
-			return nil, errors.Wrap(err, "create storage %s error", host.datapath)
-		}
-
-		host.storage = storage
 	}
 
 	if err := host.boostrap(); err != nil {
@@ -213,6 +131,7 @@ func (host *hostImpl) LocalAddrs() []multiaddr.Multiaddr {
 }
 
 func (host *hostImpl) Peers() []string {
+
 	host.RLock()
 	defer host.RUnlock()
 
@@ -228,18 +147,8 @@ func (host *hostImpl) Peers() []string {
 func (host *hostImpl) checkAddr(id string, addr multiaddr.Multiaddr) bool {
 	addrs, ok := host.Find(id)
 
-	if !ok && host.persistence {
-		var err error
-		addrs, err = host.storage.GetPeer(id)
-
-		if err != nil {
-			host.E("get peer {@id} from storage error", id)
-			return false
-		}
-
-		host.Lock()
-		host.peers[id] = addrs
-		host.Unlock()
+	if !ok {
+		return false
 	}
 
 	for _, m := range addrs {
@@ -278,12 +187,6 @@ func (host *hostImpl) Register(addr multiaddr.Multiaddr) error {
 	host.peers[id] = append(host.peers[id], prefix)
 	host.Unlock()
 
-	if host.persistence {
-		if err := host.storage.PutPeer(id, prefix, 0); err != nil {
-			return errors.Wrap(err, "save peer %s with addr %s error", id, prefix)
-		}
-	}
-
 	return nil
 }
 
@@ -312,12 +215,6 @@ func (host *hostImpl) Unregister(paddr multiaddr.Multiaddr) error {
 	host.peers[id] = new
 
 	host.Unlock()
-
-	if len(new) != len(addrs) && host.persistence {
-		if err := host.storage.RemovePeer(id, prefix); err != nil {
-			return errors.Wrap(err, "save peer %s with addr %s error", id, prefix)
-		}
-	}
 
 	return nil
 }

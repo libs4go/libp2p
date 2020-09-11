@@ -65,16 +65,6 @@ func (host *hostImpl) boostrap() error {
 
 func (host *hostImpl) boostrapMnemonic() error {
 	if host.mnemonic == "" {
-		if host.persistence {
-			mnemonic, err := host.storage.LocalKey(host.protectPassword)
-
-			if err != nil {
-				return errors.Wrap(err, "load local key error")
-			}
-
-			host.mnemonic = mnemonic
-		}
-
 		if host.mnemonic == "" {
 			mnemonic, err := key.RandomMnemonic(16)
 
@@ -83,12 +73,6 @@ func (host *hostImpl) boostrapMnemonic() error {
 			}
 
 			host.mnemonic = mnemonic
-
-			if host.persistence {
-				if err := host.storage.SaveLocalKey(mnemonic, host.protectPassword); err != nil {
-					return errors.Wrap(err, "save local key error")
-				}
-			}
 		}
 	}
 
