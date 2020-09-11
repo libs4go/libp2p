@@ -38,6 +38,12 @@ type storageImpl struct {
 
 func newStorage(path string) (Storage, error) {
 
+	if !isExists(path) {
+		if err := os.MkdirAll(path, 0644); err != nil {
+			return nil, errors.Wrap(err, "create data path %s error", path)
+		}
+	}
+
 	dbpath := filepath.Join(path, "peer.db")
 
 	engine, err := xorm.NewEngine("sqlite3", fmt.Sprintf("%s", dbpath))
@@ -135,7 +141,7 @@ func (storage *storageImpl) GetPeer(id string) ([]multiaddr.Multiaddr, error) {
 
 	var peerInfos []peerInfo
 
-	err := storage.engine.Find(&peerInfos)
+	err := storage.engine.Where(`"i_d" = ?`, id).Find(&peerInfos)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "query peer %s error", id)
