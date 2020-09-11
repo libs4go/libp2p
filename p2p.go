@@ -1,7 +1,6 @@
 package p2p
 
 import (
-	"bytes"
 	"context"
 	"math/rand"
 	"net"
@@ -11,10 +10,12 @@ import (
 
 	"github.com/inconshreveable/muxado"
 	"github.com/libs4go/bcf4go/key"
+	_ "github.com/libs4go/bcf4go/key/encoding"               //
+	_ "github.com/libs4go/bcf4go/key/provider"               //
+	didProvider "github.com/libs4go/bcf4go/key/provider/did" //
 	"github.com/libs4go/errors"
 	"github.com/libs4go/slf4go"
 	"github.com/libs4go/stf4go"
-	"github.com/libs4go/stf4go/transports/tls"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/grpc"
 )
@@ -27,17 +28,27 @@ var (
 	ErrAddr         = errors.New("did address error", errors.WithVendor(errVendor), errors.WithCode(-1))
 	ErrPeerNotFound = errors.New("peer not register", errors.WithVendor(errVendor), errors.WithCode(-2))
 	ErrClosed       = errors.New("peer host closed", errors.WithVendor(errVendor), errors.WithCode(-3))
+	ErrTLS          = errors.New("underlying transports must include stf4go/transports/tls", errors.WithVendor(errVendor), errors.WithCode(-4))
+	ErrPeerID       = errors.New("remote peer id is not match", errors.WithVendor(errVendor), errors.WithCode(-5))
 )
 
 var didBip32Path = "m/44'/201910'/0'/0/0"
-var didDriverName = "w3"
+var didDriverName = "p2p"
+
+func init() {
+	didProvider.Vendor("p2p", "p2p")
+}
 
 // Host p2p host
 type Host interface {
+	ID() string
+	LocalAddrs() []multiaddr.Multiaddr
 	Register(paddr multiaddr.Multiaddr) error
 	Find(id string) ([]multiaddr.Multiaddr, bool)
+	Peers() []string
 	Dial(ctx context.Context, id string, dialOpts ...grpc.DialOption) (*grpc.ClientConn, error)
-	Server(opts ...grpc.ServerOption) *grpc.Server
+	Server() *grpc.Server
+	Run() error
 }
 
 type hostImpl struct {
@@ -55,7 +66,13 @@ type hostImpl struct {
 	id              key.Key
 	tlsKeyStore     []byte
 	accepted        chan net.Conn
-	muxSessions     map[string]muxado.Session
+	muxSessions     map[string]*sessionPair
+	grpcServer      *grpc.Server
+}
+
+type sessionPair struct {
+	in  muxado.Session
+	out muxado.Session
 }
 
 // Option .
@@ -123,9 +140,11 @@ func AddrStrings(laddrs ...string) Option {
 func New(options ...Option) (Host, error) {
 
 	host := &hostImpl{
-		Logger:   slf4go.Get("p2p"),
-		datapath: "./data",
-		peers:    make(map[string][]multiaddr.Multiaddr),
+		Logger:      slf4go.Get("p2p"),
+		datapath:    "./data",
+		peers:       make(map[string][]multiaddr.Multiaddr),
+		muxSessions: make(map[string]*sessionPair),
+		accepted:    make(chan net.Conn),
 	}
 
 	for _, opt := range options {
@@ -135,9 +154,7 @@ func New(options ...Option) (Host, error) {
 	}
 
 	if host.laddrs == nil {
-		opt := AddrStrings(
-			"/ip4/0.0.0.0/udp/1912/kcp/tls",
-			"/ip6/::1/udp/1912/kcp/tls")
+		opt := AddrStrings("/ip4/0.0.0.0/udp/1912/kcp/tls")
 
 		if err := opt(host); err != nil {
 			return nil, errors.Wrap(err, "call opt error")
@@ -150,13 +167,16 @@ func New(options ...Option) (Host, error) {
 		}
 	}
 
-	storage, err := newStorage(host.datapath)
+	if host.persistence {
 
-	if err != nil {
-		return nil, errors.Wrap(err, "create storage %s error", host.datapath)
+		storage, err := newStorage(host.datapath)
+
+		if err != nil {
+			return nil, errors.Wrap(err, "create storage %s error", host.datapath)
+		}
+
+		host.storage = storage
 	}
-
-	host.storage = storage
 
 	if err := host.boostrap(); err != nil {
 		return nil, err
@@ -165,159 +185,29 @@ func New(options ...Option) (Host, error) {
 	return host, nil
 }
 
-func (host *hostImpl) boostrap() error {
-
-	if err := host.boostrapMnemonic(); err != nil {
-		return err
-	}
-
-	// create local id
-
-	id, err := key.DriveKey(didDriverName, host.mnemonic, didBip32Path)
-
-	if err != nil {
-		return err
-	}
-
-	host.id = id
-
-	var buff bytes.Buffer
-
-	err = key.Encode("web3.standard", id.PriKey(), key.Property{
-		"password": host.protectPassword,
-	}, &buff)
-
-	if err != nil {
-		return err
-	}
-
-	host.tlsKeyStore = buff.Bytes()
-
-	if err := host.listen(); err != nil {
-		return err
-	}
-
-	return nil
+func (host *hostImpl) Run() error {
+	return host.grpcServer.Serve(host)
 }
 
-func (host *hostImpl) listen() error {
-	for _, laddr := range host.laddrs {
-		laddr, err := didAddress(host.id.Address(), laddr)
-
-		if err != nil {
-			return err
-		}
-
-		listener, err := stf4go.Listen(laddr, host.listenOps...)
-
-		if err != nil {
-			return err
-		}
-
-		go host.accept(listener)
-	}
-
-	return nil
+func (host *hostImpl) ID() string {
+	return host.id.Address()
 }
 
-func (host *hostImpl) accept(listener stf4go.Listener) {
-	for {
-		conn, err := listener.Accept()
-
-		if err != nil {
-			host.E("listener %s accept error: %s", listener.Addr().String(), err)
-			continue
-		}
-
-		_, did, err := didFromAddress(conn.RemoteAddr())
-
-		if err != nil {
-			host.E("parse remote peer addr %s err %s", conn.RemoteAddr().String(), err)
-			continue
-		}
-
-		muxSession := muxado.Server(conn, nil)
-
-		go host.handleMuxAccept(did, muxSession)
-	}
+func (host *hostImpl) LocalAddrs() []multiaddr.Multiaddr {
+	return host.laddrs
 }
 
-func (host *hostImpl) handleMuxAccept(id string, muxSession muxado.Session) {
+func (host *hostImpl) Peers() []string {
+	host.RLock()
+	defer host.RUnlock()
 
-	defer func() {
-		host.Lock()
-		session, ok := host.muxSessions[id]
+	var ids []string
 
-		if ok && session == muxSession {
-			delete(host.muxSessions, id)
-		}
-		host.Unlock()
-
-		muxSession.Close()
-	}()
-
-	host.Lock()
-	_, ok := host.muxSessions[id]
-
-	if !ok {
-		host.muxSessions[id] = muxSession
+	for id := range host.peers {
+		ids = append(ids, id)
 	}
 
-	host.Unlock()
-
-	if !ok {
-		return
-	}
-
-	for {
-		conn, err := muxSession.Accept()
-
-		if err != nil {
-			host.E("peer session %s accept error: %s", id, err)
-
-			code, _ := muxado.GetError(err)
-
-			if code == muxado.SessionClosed {
-				return
-			}
-
-			continue
-		}
-
-		host.accepted <- conn
-	}
-}
-
-func (host *hostImpl) boostrapMnemonic() error {
-	if host.mnemonic == "" {
-		if host.persistence {
-			mnemonic, err := host.storage.LocalKey(host.protectPassword)
-
-			if err != nil {
-				return errors.Wrap(err, "load local key error")
-			}
-
-			host.mnemonic = mnemonic
-		}
-
-		if host.mnemonic == "" {
-			mnemonic, err := key.RandomMnemonic(12)
-
-			if err != nil {
-				return errors.Wrap(err, "load local key error")
-			}
-
-			host.mnemonic = mnemonic
-
-			if host.persistence {
-				if err := host.storage.SaveLocalKey(mnemonic, host.protectPassword); err != nil {
-					return errors.Wrap(err, "save local key error")
-				}
-			}
-		}
-	}
-
-	return nil
+	return ids
 }
 
 func (host *hostImpl) checkAddr(id string, addr multiaddr.Multiaddr) bool {
@@ -361,6 +251,10 @@ func (host *hostImpl) Register(addr multiaddr.Multiaddr) error {
 		return errors.Wrap(err, "p2p register addr must end with /did")
 	}
 
+	if prefix == nil {
+		return errors.Wrap(err, "p2p register addr must have prefix")
+	}
+
 	if host.checkAddr(id, prefix) {
 		return nil
 	}
@@ -390,87 +284,9 @@ func shuffle(vals []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 	return ret
 }
 
-func (host *hostImpl) Dial(ctx context.Context, id string, dialOpts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	dialOpsPrepended := append([]grpc.DialOption{host.dialOption(ctx)}, dialOpts...)
+func (host *hostImpl) Server() *grpc.Server {
 
-	return grpc.DialContext(ctx, id, dialOpsPrepended...)
-}
-
-func (host *hostImpl) dial(ctx context.Context, remote string) (stf4go.Conn, error) {
-	addrs, ok := host.Find(remote)
-
-	if !ok {
-		return nil, errors.Wrap(ErrPeerNotFound, "peer %s not register", remote)
-	}
-
-	addrs = shuffle(addrs)
-
-	for _, addr := range addrs {
-		da, err := didAddress(remote, addr)
-
-		if err != nil {
-			return nil, err
-		}
-
-		conn, err := stf4go.Dial(ctx, da, tls.KeyWeb3(host.tlsKeyStore), tls.KeyPassword(host.protectPassword), tls.KeyProvider(didDriverName))
-
-		if err != nil {
-			return nil, err
-		}
-
-		return conn, nil
-	}
-
-	return nil, errors.Wrap(ErrPeerNotFound, "peer %s not register", remote)
-}
-
-func (host *hostImpl) dialOption(ctx context.Context) grpc.DialOption {
-	return grpc.WithDialer(func(remote string, timeout time.Duration) (net.Conn, error) {
-		host.RLock()
-		session, ok := host.muxSessions[remote]
-		host.RUnlock()
-
-		if ok {
-			return session.Open()
-		}
-
-		underlyConn, err := host.dial(ctx, remote)
-
-		if err != nil {
-			return nil, err
-		}
-
-		muxSession := muxado.Client(underlyConn, nil)
-
-		go host.handleMuxAccept(remote, muxSession)
-
-		return muxSession.Open()
-	})
-}
-
-func (host *hostImpl) Server(opts ...grpc.ServerOption) *grpc.Server {
-
-	server := grpc.NewServer(opts...)
-
-	go server.Serve(host)
-
-	return server
-}
-
-func (host *hostImpl) Accept() (net.Conn, error) {
-
-	conn, ok := <-host.accepted
-
-	if !ok {
-		return nil, ErrClosed
-	}
-
-	return conn, nil
-}
-
-func (host *hostImpl) Close() error {
-	close(host.accepted)
-	return nil
+	return host.grpcServer
 }
 
 type p2pAddr struct {
@@ -487,4 +303,25 @@ func (addr *p2pAddr) String() string {
 
 func (host *hostImpl) Addr() net.Addr {
 	return &p2pAddr{id: host.id.Address()}
+}
+
+type p2pNetConn struct {
+	net.Conn
+	laddr *p2pAddr
+	raddr *p2pAddr
+}
+
+func newP2PNetConn(lid, rid string, conn net.Conn) net.Conn {
+	return &p2pNetConn{
+		Conn:  conn,
+		laddr: &p2pAddr{id: lid},
+		raddr: &p2pAddr{id: rid},
+	}
+}
+
+func (conn *p2pNetConn) LocalAddr() net.Addr {
+	return conn.laddr
+}
+func (conn *p2pNetConn) RemoteAddr() net.Addr {
+	return conn.raddr
 }
