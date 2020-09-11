@@ -39,7 +39,7 @@ func (host *hostImpl) dial(ctx context.Context, remote string) (stf4go.Conn, err
 
 		host.D("host {@lid} dial to {@addr}", host.ID(), addr.String())
 
-		conn, err := stf4go.Dial(ctx, da, append(host.dialOps, tls.KeyWeb3(host.tlsKeyStore), tls.KeyPassword(host.protectPassword), tls.KeyProvider(didDriverName))...)
+		conn, err := stf4go.Dial(ctx, da, append(host.dialOps, tls.WithKey(host.id))...)
 
 		if err != nil {
 			host.E("host {@lid} dial to {@addr} err {@err}", host.ID(), addr.String(), err)

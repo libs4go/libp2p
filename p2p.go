@@ -55,18 +55,15 @@ type Host interface {
 type hostImpl struct {
 	sync.RWMutex
 	slf4go.Logger
-	mnemonic        string
-	dialOps         []stf4go.Option
-	listenOps       []stf4go.Option
-	persistence     bool
-	protectPassword string
-	laddrs          []multiaddr.Multiaddr
-	peers           map[string][]multiaddr.Multiaddr
-	id              key.Key
-	tlsKeyStore     []byte
-	accepted        chan net.Conn
-	muxSessions     map[string]*sessionPair
-	grpcServer      *grpc.Server
+	mnemonic    string
+	dialOps     []stf4go.Option
+	listenOps   []stf4go.Option
+	laddrs      []multiaddr.Multiaddr
+	peers       map[string][]multiaddr.Multiaddr
+	id          key.Key
+	accepted    chan net.Conn
+	muxSessions map[string]*sessionPair
+	grpcServer  *grpc.Server
 }
 
 type sessionPair struct {

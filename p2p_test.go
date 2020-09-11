@@ -34,11 +34,11 @@ var loggerjson = `
 	},
 	"logger":{
 		"p2p":{
-			"backend":"console",
+			"backend":"null",
 			"level":"debug"
 		},
 		"stf4go-transport-p2p":{
-			"backend":"console",
+			"backend":"null",
 			"level":"debug"
 		}
 

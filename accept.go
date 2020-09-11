@@ -12,7 +12,7 @@ func (host *hostImpl) listen() error {
 
 	for _, laddr := range host.laddrs {
 
-		listener, err := stf4go.Listen(laddr, append(host.listenOps, tls.KeyWeb3(host.tlsKeyStore), tls.KeyPassword(host.protectPassword), tls.KeyProvider(didDriverName))...)
+		listener, err := stf4go.Listen(laddr, append(host.listenOps, tls.WithKey(host.id))...)
 
 		if err != nil {
 			return err

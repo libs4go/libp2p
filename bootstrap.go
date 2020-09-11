@@ -1,8 +1,6 @@
 package p2p
 
 import (
-	"bytes"
-
 	"github.com/libs4go/bcf4go/key"
 	"github.com/libs4go/errors"
 	"github.com/multiformats/go-multiaddr"
@@ -25,18 +23,6 @@ func (host *hostImpl) boostrap() error {
 	}
 
 	host.id = id
-
-	var buff bytes.Buffer
-
-	err = key.Encode("web3.standard", id.PriKey(), key.Property{
-		"password": host.protectPassword,
-	}, &buff)
-
-	if err != nil {
-		return err
-	}
-
-	host.tlsKeyStore = buff.Bytes()
 
 	var laddrs []multiaddr.Multiaddr
 

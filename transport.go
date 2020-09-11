@@ -3,7 +3,6 @@ package p2p
 import (
 	"github.com/libs4go/bcf4go/key"
 	"github.com/libs4go/errors"
-	"github.com/libs4go/scf4go"
 	"github.com/libs4go/slf4go"
 	"github.com/libs4go/stf4go"
 	_ "github.com/libs4go/stf4go/transports/kcp" //
@@ -104,7 +103,7 @@ func getTLSConn(conn stf4go.Conn) (tls.Conn, bool) {
 	return nil, false
 }
 
-func (transport *p2pTransport) Client(conn stf4go.Conn, raddr multiaddr.Multiaddr, config scf4go.Config) (stf4go.Conn, error) {
+func (transport *p2pTransport) Client(conn stf4go.Conn, raddr multiaddr.Multiaddr, options *stf4go.Options) (stf4go.Conn, error) {
 
 	_, rid, err := didFromAddress(raddr)
 
@@ -131,7 +130,7 @@ func (transport *p2pTransport) Client(conn stf4go.Conn, raddr multiaddr.Multiadd
 	return newP2PConn(conn, rid, lid)
 }
 
-func (transport *p2pTransport) Server(conn stf4go.Conn, laddr multiaddr.Multiaddr, config scf4go.Config) (stf4go.Conn, error) {
+func (transport *p2pTransport) Server(conn stf4go.Conn, laddr multiaddr.Multiaddr, options *stf4go.Options) (stf4go.Conn, error) {
 
 	tlsConn, ok := getTLSConn(conn)
 
